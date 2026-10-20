@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#fdf6f0">
+  <title>我们的日历 · 异地恋情侣同步日历</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ===== 认证 / 配对 ===== -->
+  <section id="auth-view" class="auth-view">
+    <div class="auth-card">
+      <div class="auth-logo">❤</div>
+      <h1>我们的日历</h1>
+      <p class="auth-sub">异地也要一起安排每一天</p>
+      <div class="auth-tabs">
+        <button class="auth-tab active" data-tab="create">创建空间</button>
+        <button class="auth-tab" data-tab="join">加入空间</button>
+      </div>
+      <form id="auth-form">
+        <div id="form-space-name" class="field">
+          <label>空间名称</label>
+          <input id="inp-space-name" placeholder="例如：我们的小窝">
+        </div>
+        <div id="form-invite" class="field" hidden>
+          <label>情侣邀请码</label>
+          <input id="inp-invite" placeholder="输入对方给你的 6 位邀请码" maxlength="6" autocomplete="off" style="text-transform:uppercase">
+        </div>
+        <div class="field">
+          <label>我的昵称</label>
+          <input id="inp-nickname" placeholder="例如：宝宝">
+        </div>
+        <div class="field">
+          <label>我的时区</label>
+          <select id="inp-timezone"></select>
+          <div class="field-hint" id="tz-hint"></div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-block" id="auth-submit">开始使用</button>
+      </form>
+      <p class="auth-error" id="auth-error"></p>
+    </div>
+  </section>
+
+  <!-- ===== 主应用 ===== -->
+  <section id="app-view" hidden>
+    <header class="topbar">
+      <div class="topbar-row1">
+        <div class="brand"><span class="heart">❤</span><span id="space-name"></span></div>
+        <button class="icon-btn" id="btn-settings" title="设置">⚙</button>
+      </div>
+      <div class="topbar-row2">
+        <div class="perspective-toggle" id="perspective-toggle">
+          <button data-p="me" class="active">我的时间</button>
+          <button data-p="partner">对方时间</button>
+        </div>
+        <div class="partner-now" id="partner-now"></div>
+      </div>
+      <div class="love-days" id="love-days" hidden></div>
+    </header>
+
+    <div class="banner" id="invite-banner" hidden>
+      对方还没加入，把邀请码发给 TA：<code id="banner-invite"></code>
+      <button class="btn btn-ghost btn-sm" id="banner-copy">复制</button>
+    </div>
+
+    <div class="viewbar">
+      <div class="nav">
+        <button class="icon-btn" id="btn-prev" title="上一页">‹</button>
+        <button class="btn btn-today" id="btn-today">今天</button>
+        <button class="icon-btn" id="btn-next" title="下一页">›</button>
+        <span class="nav-title" id="nav-title"></span>
+      </div>
+      <div class="view-switch">
+        <button data-view="month" class="active">月</button>
+        <button data-view="week">周</button>
+        <button data-view="day">日</button>
+      </div>
+    </div>
+
+    <div class="legend" id="legend"></div>
+    <div class="freetime-toggle">
+      <label class="checkbox">
+        <input type="checkbox" id="freetime-check"> 高亮共同空闲时间
+      </label>
+    </div>
+
+    <div id="calendar" class="calendar"></div>
+
+    <button class="fab" id="btn-add" title="添加日程">＋</button>
+  </section>
+
+  <!-- ===== 日程详情 ===== -->
+  <div class="modal-backdrop" id="modal-detail" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="detail-title"></h2>
+        <button class="icon-btn modal-close" data-close="modal-detail">✕</button>
+      </div>
+      <div class="modal-body" id="detail-body"></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="btn-detail-delete">删除</button>
+        <button class="btn btn-primary" id="btn-detail-edit">编辑</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 日程编辑 ===== -->
+  <div class="modal-backdrop" id="modal-edit" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="edit-heading">添加日程</h2>
+        <button class="icon-btn modal-close" data-close="modal-edit">✕</button>
+      </div>
+      <form id="edit-form" class="modal-body form">
+        <div class="field">
+          <label>标题</label>
+          <input id="e-title" required placeholder="例如：视频通话">
+        </div>
+        <div class="field">
+          <label>类型</label>
+          <select id="e-type">
+            <option value="event">普通日程</option>
+            <option value="todo">待办</option>
+            <option value="anniversary">纪念日</option>
+          </select>
+        </div>
+        <div class="field row">
+          <div>
+            <label>开始日期</label>
+            <input type="date" id="e-start-date">
+          </div>
+          <div>
+            <label>开始时间</label>
+            <input type="time" id="e-start-time">
+          </div>
+        </div>
+        <div class="field row">
+          <div>
+            <label>结束日期</label>
+            <input type="date" id="e-end-date">
+          </div>
+          <div>
+            <label>结束时间</label>
+            <input type="time" id="e-end-time">
+          </div>
+        </div>
+        <div class="field">
+          <label class="checkbox"><input type="checkbox" id="e-allday"> 全天</label>
+        </div>
+        <div class="field">
+          <label>重复</label>
+          <select id="e-repeat">
+            <option value="none">不重复</option>
+            <option value="daily">每天</option>
+            <option value="weekly">每周</option>
+            <option value="monthly">每月</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>提醒</label>
+          <select id="e-reminder">
+            <option value="">不提醒</option>
+            <option value="0">开始前即时</option>
+            <option value="10">提前 10 分钟</option>
+            <option value="30">提前 30 分钟</option>
+            <option value="60">提前 1 小时</option>
+            <option value="1440">提前 1 天</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>备注</label>
+          <textarea id="e-notes" rows="2" placeholder="补充说明…"></textarea>
+        </div>
+        <div class="field-hint" id="e-tz-preview"></div>
+        <button type="submit" class="btn btn-primary btn-block">保存</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===== 设置 ===== -->
+  <div class="modal-backdrop" id="modal-settings" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h2>设置</h2>
+        <button class="icon-btn modal-close" data-close="modal-settings">✕</button>
+      </div>
+      <form id="settings-form" class="modal-body form">
+        <div class="field">
+          <label>空间名称</label>
+          <input id="s-space-name">
+        </div>
+        <div class="field">
+          <label>我的昵称</label>
+          <input id="s-nickname">
+        </div>
+        <div class="field">
+          <label>我的时区</label>
+          <select id="s-timezone"></select>
+        </div>
+        <div class="field">
+          <label>我的颜色</label>
+          <input type="color" id="s-color">
+        </div>
+        <div class="field">
+          <label>在一起的日子</label>
+          <input type="date" id="s-together">
+          <div class="field-hint">设置后首页会常驻显示「在一起 X 天」</div>
+        </div>
+        <div class="field invite-box">
+          <label>情侣邀请码</label>
+          <div class="invite-row">
+            <code id="s-invite"></code>
+            <button type="button" class="btn btn-ghost btn-sm" id="btn-copy-invite">复制</button>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-regen-invite">重新生成邀请码</button>
+        </div>
+        <button type="submit" class="btn btn-primary btn-block">保存设置</button>
+        <button type="button" class="btn btn-ghost btn-block" id="btn-leave">退出 / 换空间</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast-container" class="toast-container"></div>
+
+  <script type="module" src="tz.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

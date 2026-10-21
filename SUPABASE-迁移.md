@@ -39,6 +39,7 @@ create table if not exists members (
   timezone text not null default 'Asia/Shanghai',
   color text not null default '#6ea8fe',
   token text not null unique,
+  login_code text unique,
   created_at timestamptz not null default now()
 );
 
@@ -69,6 +70,12 @@ alter table spaces enable row level security;
 alter table members enable row level security;
 alter table events enable row level security;
 ```
+
+> 📌 **如果你之前已经建过表（这是升级）**：你的 `members` 表还缺一个 `login_code` 列，需要**再单独运行这一句**：
+>
+> ```sql
+> alter table members add column if not exists login_code text unique;
+> ```
 
 4. 运行成功后，下面会显示 **「Success. No rows returned」**，左侧能看到多出 `spaces`、`members`、`events` 三张表，就成功了 ✅
 

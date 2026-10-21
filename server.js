@@ -10,8 +10,8 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
   insertSpace, findSpaceByInvite, findSpaceById, updateSpace,
-  insertMember, updateMember, findMemberByToken, listMembers,
-  listEvents, insertEvent, findEvent, updateEvent, deleteEvent,
+  insertMember, updateMember, findMemberByToken, findMemberByLoginCode, setMemberLoginCode, listMembers,
+  listEvents, insertEvent, findEvent, updateEvent, deleteEvent, deleteEventsBySpace,
 } from './lib/store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -45,6 +45,22 @@ async function uniqueInviteCode() {
   return code;
 }
 
+function genLoginCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const g = () => { let s = ''; for (let i = 0; i < 4; i++) s += chars[Math.floor(Math.random() * chars.length)]; return s; };
+  return `${g()}-${g()}-${g()}`;
+}
+
+async function uniqueLoginCode() {
+  let code;
+  let guard = 0;
+  do {
+    code = genLoginCode();
+    guard++;
+  } while (guard < 20 && (await findMemberByLoginCode(code)));
+  return code;
+}
+
 async function getAuth(req) {
   const h = req.headers['authorization'] || '';
   const bearer = h.startsWith('Bearer ') ? h.slice(7) : null;
@@ -66,7 +82,7 @@ async function attachMembers(space) {
 function publicSpace(space) {
   return {
     ...space,
-    members: space.members.map(({ token, spaceId, ...rest }) => rest),
+    members: space.members.map(({ token, spaceId, loginCode, ...rest }) => rest),
   };
 }
 
@@ -123,7 +139,7 @@ app.post('/api/spaces', async (req, res, next) => {
     await insertSpace(space);
     const member = {
       id: id('m_'), spaceId: space.id, nickname: String(nickname).trim(),
-      timezone: timezone || 'Asia/Shanghai', color: '#6ea8fe', token: newToken(),
+      timezone: timezone || 'Asia/Shanghai', color: '#6ea8fe', token: newToken(), loginCode: await uniqueLoginCode(),
     };
     await insertMember(member);
     await attachMembers(space);
@@ -142,7 +158,7 @@ app.post('/api/spaces/join', async (req, res, next) => {
     if (members.length >= 2) return res.status(409).json({ error: '这个空间已经有两个人啦' });
     const member = {
       id: id('m_'), spaceId: space.id, nickname: String(nickname).trim(),
-      timezone: timezone || 'Asia/Shanghai', color: '#f472b6', token: newToken(),
+      timezone: timezone || 'Asia/Shanghai', color: '#f472b6', token: newToken(), loginCode: await uniqueLoginCode(),
     };
     await insertMember(member);
     await attachMembers(space);
@@ -237,6 +253,108 @@ app.delete('/api/events/:id', async (req, res, next) => {
     await deleteEvent(req.params.id);
     broadcast(auth.space.id, { type: 'event', action: 'delete', event: { id: req.params.id } });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// 用登录码登录（换设备/退出后回到自己的空间）
+app.post('/api/login', async (req, res, next) => {
+  try {
+    const { loginCode } = req.body || {};
+    const member = await findMemberByLoginCode(String(loginCode || '').toUpperCase().trim());
+    if (!member) return res.status(404).json({ error: '登录码无效，请检查' });
+    const space = await findSpaceById(member.spaceId);
+    if (!space) return res.status(404).json({ error: '空间不存在' });
+    await attachMembers(space);
+    const events = await listEvents(space.id);
+    res.json({ space: publicSpace(space), memberId: member.id, token: member.token, events });
+  } catch (e) { next(e); }
+});
+
+// 获取（或首次生成）我的登录码
+app.post('/api/me/login-code', async (req, res, next) => {
+  try {
+    const auth = await getAuth(req);
+    if (!auth) return res.status(401).json({ error: '未登录' });
+    let code = auth.member.loginCode;
+    if (!code) {
+      code = await uniqueLoginCode();
+      await setMemberLoginCode(auth.member.id, code);
+    }
+    res.json({ loginCode: code });
+  } catch (e) { next(e); }
+});
+
+// 导出全部数据（备份）
+app.get('/api/export', async (req, res, next) => {
+  try {
+    const auth = await getAuth(req);
+    if (!auth) return res.status(401).json({ error: '未登录' });
+    await attachMembers(auth.space);
+    const events = await listEvents(auth.space.id);
+    const backup = {
+      app: 'couple-calendar',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      space: {
+        name: auth.space.name,
+        inviteCode: auth.space.inviteCode,
+        togetherSince: auth.space.togetherSince,
+        members: auth.space.members.map((m) => ({ id: m.id, nickname: m.nickname, timezone: m.timezone, color: m.color })),
+      },
+      events,
+    };
+    res.setHeader('Content-Disposition', 'attachment; filename="couple-calendar-backup.json"');
+    res.json(backup);
+  } catch (e) { next(e); }
+});
+
+// 导入备份（覆盖当前空间日程）
+app.post('/api/import', async (req, res, next) => {
+  try {
+    const auth = await getAuth(req);
+    if (!auth) return res.status(401).json({ error: '未登录' });
+    const data = req.body || {};
+    if (!Array.isArray(data.events)) return res.status(400).json({ error: '备份文件格式不正确' });
+    await attachMembers(auth.space);
+    const currentMembers = auth.space.members;
+    const backupMembers = Array.isArray(data.space && data.space.members) ? data.space.members : [];
+    const authorMap = {};
+    backupMembers.forEach((bm, i) => { if (bm && bm.id && currentMembers[i]) authorMap[bm.id] = currentMembers[i].id; });
+
+    if (data.space) {
+      const spacePatch = {};
+      if (typeof data.space.name === 'string' && data.space.name.trim()) spacePatch.name = data.space.name.trim();
+      if (data.space.togetherSince !== undefined) spacePatch.togetherSince = data.space.togetherSince || null;
+      await updateSpace(auth.space.id, spacePatch);
+    }
+
+    await deleteEventsBySpace(auth.space.id);
+    const now = new Date().toISOString();
+    for (const ev of data.events) {
+      const startMs = Date.parse(ev.start);
+      const endMs = Date.parse(ev.end);
+      if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs) continue;
+      const type = ['event', 'todo', 'anniversary'].includes(ev.type) ? ev.type : 'event';
+      const repeat = ['none', 'daily', 'weekly', 'monthly'].includes(ev.repeat) ? ev.repeat : 'none';
+      await insertEvent({
+        id: id('ev_'),
+        spaceId: auth.space.id,
+        authorId: authorMap[ev.authorId] || auth.member.id,
+        title: String(ev.title || '').trim() || '(无标题)',
+        start: new Date(startMs).toISOString(),
+        end: new Date(endMs).toISOString(),
+        allDay: !!ev.allDay,
+        notes: String(ev.notes || ''),
+        type,
+        done: type === 'todo' ? !!ev.done : false,
+        repeat,
+        reminderMinutes: (ev.reminderMinutes === null || ev.reminderMinutes === undefined) ? null : Number(ev.reminderMinutes),
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    broadcast(auth.space.id, { type: 'event', action: 'bulk-import' });
+    res.json({ ok: true, imported: data.events.length });
   } catch (e) { next(e); }
 });
 

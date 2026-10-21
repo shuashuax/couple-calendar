@@ -1,12 +1,18 @@
 // 异地恋情侣同步日历 —— 后端服务
-// Express 提供 REST API + 静态文件，ws 提供实时同步。
+// Express 提供 REST API + 静态文件，ws 提供实时同步，数据存 Supabase Postgres。
+import { config as loadEnv } from 'dotenv';
+loadEnv({ quiet: true });
 import express from 'express';
 import { WebSocketServer, WebSocket } from 'ws';
 import http from 'node:http';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { getDb, persist } from './lib/store.js';
+import {
+  insertSpace, findSpaceByInvite, findSpaceById, updateSpace,
+  insertMember, updateMember, findMemberByToken, listMembers,
+  listEvents, insertEvent, findEvent, updateEvent, deleteEvent,
+} from './lib/store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -29,39 +35,38 @@ function genInviteCode() {
   return s;
 }
 
-function getSpaceByInvite(code) {
-  const c = String(code || '').toUpperCase().trim();
-  if (!c) return null;
-  return getDb().spaces.find((s) => s.inviteCode === c);
+async function uniqueInviteCode() {
+  let code;
+  let guard = 0;
+  do {
+    code = genInviteCode();
+    guard++;
+  } while (guard < 20 && (await findSpaceByInvite(code)));
+  return code;
 }
 
-function getAuth(req) {
+async function getAuth(req) {
   const h = req.headers['authorization'] || '';
   const bearer = h.startsWith('Bearer ') ? h.slice(7) : null;
   const token = bearer || req.query.token;
   if (!token) return null;
-  const db = getDb();
-  for (const space of db.spaces) {
-    const member = space.members.find((m) => m.token === token);
-    if (member) return { space, member };
-  }
-  return null;
+  const member = await findMemberByToken(token);
+  if (!member) return null;
+  const space = await findSpaceById(member.spaceId);
+  if (!space) return null;
+  return { space, member };
 }
 
-function getMemberByToken(token) {
-  const db = getDb();
-  for (const space of db.spaces) {
-    const member = space.members.find((m) => m.token === token);
-    if (member) return { space, member };
-  }
-  return null;
+async function attachMembers(space) {
+  space.members = await listMembers(space.id);
+  return space;
 }
 
 // 对外返回时剥离 token，避免互相冒充
 function publicSpace(space) {
   return {
     ...space,
-    members: space.members.map(({ token, ...rest }) => rest),
+    members: space.members.map(({ token, spaceId, ...rest }) => rest),
   };
 }
 
@@ -99,163 +104,147 @@ function sanitizeEvent(body, spaceId, authorId) {
 }
 
 // ---------- REST API ----------
-app.get('/api/health', (req, res) => res.json({ ok: true }));
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, supabase: !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) });
+});
 
 // 创建情侣空间
-app.post('/api/spaces', (req, res) => {
-  const { name, nickname, timezone } = req.body || {};
-  if (!nickname || !String(nickname).trim()) return res.status(400).json({ error: '请填写昵称' });
-  const db = getDb();
-  const member = {
-    id: id('m_'),
-    nickname: String(nickname).trim(),
-    timezone: timezone || 'Asia/Shanghai',
-    color: '#6ea8fe',
-    token: newToken(),
-  };
-  const space = {
-    id: id('sp_'),
-    name: String(name || '').trim() || '我们的空间',
-    inviteCode: genInviteCode(),
-    togetherSince: null,
-    members: [member],
-    createdAt: new Date().toISOString(),
-  };
-  while (db.spaces.some((s) => s.inviteCode === space.inviteCode)) space.inviteCode = genInviteCode();
-  db.spaces.push(space);
-  persist();
-  res.json({
-    space: publicSpace(space),
-    memberId: member.id,
-    token: member.token,
-    events: [],
-  });
+app.post('/api/spaces', async (req, res, next) => {
+  try {
+    const { name, nickname, timezone } = req.body || {};
+    if (!nickname || !String(nickname).trim()) return res.status(400).json({ error: '请填写昵称' });
+    const space = {
+      id: id('sp_'),
+      name: String(name || '').trim() || '我们的空间',
+      inviteCode: await uniqueInviteCode(),
+      togetherSince: null,
+      createdAt: new Date().toISOString(),
+    };
+    await insertSpace(space);
+    const member = {
+      id: id('m_'), spaceId: space.id, nickname: String(nickname).trim(),
+      timezone: timezone || 'Asia/Shanghai', color: '#6ea8fe', token: newToken(),
+    };
+    await insertMember(member);
+    await attachMembers(space);
+    res.json({ space: publicSpace(space), memberId: member.id, token: member.token, events: [] });
+  } catch (e) { next(e); }
 });
 
 // 加入情侣空间
-app.post('/api/spaces/join', (req, res) => {
-  const { inviteCode, nickname, timezone } = req.body || {};
-  const space = getSpaceByInvite(inviteCode);
-  if (!space) return res.status(404).json({ error: '邀请码无效，请检查' });
-  if (space.members.length >= 2) return res.status(409).json({ error: '这个空间已经有两个人啦' });
-  if (!nickname || !String(nickname).trim()) return res.status(400).json({ error: '请填写昵称' });
-  const member = {
-    id: id('m_'),
-    nickname: String(nickname).trim(),
-    timezone: timezone || 'Asia/Shanghai',
-    color: '#f472b6',
-    token: newToken(),
-  };
-  space.members.push(member);
-  persist();
-  broadcast(space.id, { type: 'space:updated' });
-  const events = getDb().events.filter((e) => e.spaceId === space.id);
-  res.json({
-    space: publicSpace(space),
-    memberId: member.id,
-    token: member.token,
-    events,
-  });
+app.post('/api/spaces/join', async (req, res, next) => {
+  try {
+    const { inviteCode, nickname, timezone } = req.body || {};
+    if (!nickname || !String(nickname).trim()) return res.status(400).json({ error: '请填写昵称' });
+    const space = await findSpaceByInvite(String(inviteCode || '').toUpperCase().trim());
+    if (!space) return res.status(404).json({ error: '邀请码无效，请检查' });
+    const members = await listMembers(space.id);
+    if (members.length >= 2) return res.status(409).json({ error: '这个空间已经有两个人啦' });
+    const member = {
+      id: id('m_'), spaceId: space.id, nickname: String(nickname).trim(),
+      timezone: timezone || 'Asia/Shanghai', color: '#f472b6', token: newToken(),
+    };
+    await insertMember(member);
+    await attachMembers(space);
+    broadcast(space.id, { type: 'space:updated' });
+    const events = await listEvents(space.id);
+    res.json({ space: publicSpace(space), memberId: member.id, token: member.token, events });
+  } catch (e) { next(e); }
 });
 
 // 获取当前空间与全部日程
-app.get('/api/space', (req, res) => {
-  const auth = getAuth(req);
-  if (!auth) return res.status(401).json({ error: '未登录' });
-  const events = getDb().events.filter((e) => e.spaceId === auth.space.id);
-  res.json({ space: publicSpace(auth.space), memberId: auth.member.id, events });
+app.get('/api/space', async (req, res, next) => {
+  try {
+    const auth = await getAuth(req);
+    if (!auth) return res.status(401).json({ error: '未登录' });
+    await attachMembers(auth.space);
+    const events = await listEvents(auth.space.id);
+    res.json({ space: publicSpace(auth.space), memberId: auth.member.id, events });
+  } catch (e) { next(e); }
 });
 
 // 更新空间设置 + 自己的资料
-app.patch('/api/space', (req, res) => {
-  const auth = getAuth(req);
-  if (!auth) return res.status(401).json({ error: '未登录' });
-  const space = auth.space;
-  const { name, togetherSince, member } = req.body || {};
-  if (name !== undefined) space.name = String(name).trim() || space.name;
-  if (togetherSince !== undefined) {
-    // 支持 'YYYY-MM-DD' 或 null
-    space.togetherSince = togetherSince === '' || togetherSince === null ? null : String(togetherSince);
-  }
-  if (member && typeof member === 'object') {
-    const m = space.members.find((x) => x.id === auth.member.id);
-    if (m) {
-      if (member.nickname !== undefined) m.nickname = String(member.nickname).trim() || m.nickname;
-      if (member.timezone !== undefined) m.timezone = member.timezone;
-      if (member.color !== undefined) m.color = member.color;
+app.patch('/api/space', async (req, res, next) => {
+  try {
+    const auth = await getAuth(req);
+    if (!auth) return res.status(401).json({ error: '未登录' });
+    const { name, togetherSince, member } = req.body || {};
+    const spacePatch = {};
+    if (name !== undefined) spacePatch.name = String(name).trim() || auth.space.name;
+    if (togetherSince !== undefined) spacePatch.togetherSince = togetherSince === '' || togetherSince === null ? null : String(togetherSince);
+    await updateSpace(auth.space.id, spacePatch);
+    if (member && typeof member === 'object') {
+      const mPatch = {};
+      if (member.nickname !== undefined) { const nn = String(member.nickname).trim(); if (nn) mPatch.nickname = nn; }
+      if (member.timezone !== undefined) mPatch.timezone = member.timezone;
+      if (member.color !== undefined) mPatch.color = member.color;
+      await updateMember(auth.member.id, mPatch);
     }
-  }
-  persist();
-  broadcast(space.id, { type: 'space:updated' });
-  res.json({ space: publicSpace(space), memberId: auth.member.id });
+    const space = await findSpaceById(auth.space.id);
+    await attachMembers(space);
+    broadcast(space.id, { type: 'space:updated' });
+    res.json({ space: publicSpace(space), memberId: auth.member.id });
+  } catch (e) { next(e); }
 });
 
 // 重新生成邀请码
-app.post('/api/space/regenerate-invite', (req, res) => {
-  const auth = getAuth(req);
-  if (!auth) return res.status(401).json({ error: '未登录' });
-  const space = auth.space;
-  space.inviteCode = genInviteCode();
-  while (getDb().spaces.some((s) => s.id !== space.id && s.inviteCode === space.inviteCode)) {
-    space.inviteCode = genInviteCode();
-  }
-  persist();
-  broadcast(space.id, { type: 'space:updated' });
-  res.json({ inviteCode: space.inviteCode });
+app.post('/api/space/regenerate-invite', async (req, res, next) => {
+  try {
+    const auth = await getAuth(req);
+    if (!auth) return res.status(401).json({ error: '未登录' });
+    const code = await uniqueInviteCode();
+    await updateSpace(auth.space.id, { inviteCode: code });
+    broadcast(auth.space.id, { type: 'space:updated' });
+    res.json({ inviteCode: code });
+  } catch (e) { next(e); }
 });
 
 // 新建日程
-app.post('/api/events', (req, res) => {
-  const auth = getAuth(req);
-  if (!auth) return res.status(401).json({ error: '未登录' });
-  const ev = sanitizeEvent(req.body || {}, auth.space.id, auth.member.id);
-  if (ev.error) return res.status(400).json({ error: ev.error });
-  getDb().events.push(ev);
-  persist();
-  broadcast(auth.space.id, { type: 'event', action: 'create', event: ev });
-  res.json({ event: ev });
+app.post('/api/events', async (req, res, next) => {
+  try {
+    const auth = await getAuth(req);
+    if (!auth) return res.status(401).json({ error: '未登录' });
+    const ev = sanitizeEvent(req.body || {}, auth.space.id, auth.member.id);
+    if (ev.error) return res.status(400).json({ error: ev.error });
+    await insertEvent(ev);
+    broadcast(auth.space.id, { type: 'event', action: 'create', event: ev });
+    res.json({ event: ev });
+  } catch (e) { next(e); }
 });
 
 // 更新日程
-app.put('/api/events/:id', (req, res) => {
-  const auth = getAuth(req);
-  if (!auth) return res.status(401).json({ error: '未登录' });
-  const db = getDb();
-  const idx = db.events.findIndex((e) => e.id === req.params.id && e.spaceId === auth.space.id);
-  if (idx === -1) return res.status(404).json({ error: '日程不存在' });
-  const existing = db.events[idx];
-  const merged = sanitizeEvent(
-    { ...req.body, id: existing.id, createdAt: existing.createdAt },
-    auth.space.id,
-    existing.authorId,
-  );
-  if (merged.error) return res.status(400).json({ error: merged.error });
-  db.events[idx] = merged;
-  persist();
-  broadcast(auth.space.id, { type: 'event', action: 'update', event: merged });
-  res.json({ event: merged });
+app.put('/api/events/:id', async (req, res, next) => {
+  try {
+    const auth = await getAuth(req);
+    if (!auth) return res.status(401).json({ error: '未登录' });
+    const existing = await findEvent(req.params.id, auth.space.id);
+    if (!existing) return res.status(404).json({ error: '日程不存在' });
+    const merged = sanitizeEvent({ ...req.body, id: existing.id, createdAt: existing.createdAt }, auth.space.id, existing.authorId);
+    if (merged.error) return res.status(400).json({ error: merged.error });
+    await updateEvent(merged);
+    broadcast(auth.space.id, { type: 'event', action: 'update', event: merged });
+    res.json({ event: merged });
+  } catch (e) { next(e); }
 });
 
 // 删除日程
-app.delete('/api/events/:id', (req, res) => {
-  const auth = getAuth(req);
-  if (!auth) return res.status(401).json({ error: '未登录' });
-  const db = getDb();
-  const idx = db.events.findIndex((e) => e.id === req.params.id && e.spaceId === auth.space.id);
-  if (idx === -1) return res.status(404).json({ error: '日程不存在' });
-  const [ev] = db.events.splice(idx, 1);
-  persist();
-  broadcast(auth.space.id, { type: 'event', action: 'delete', event: { id: ev.id } });
-  res.json({ ok: true });
+app.delete('/api/events/:id', async (req, res, next) => {
+  try {
+    const auth = await getAuth(req);
+    if (!auth) return res.status(401).json({ error: '未登录' });
+    const existing = await findEvent(req.params.id, auth.space.id);
+    if (!existing) return res.status(404).json({ error: '日程不存在' });
+    await deleteEvent(req.params.id);
+    broadcast(auth.space.id, { type: 'event', action: 'delete', event: { id: req.params.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
 });
 
 // ---------- WebSocket 实时同步 ----------
 function broadcast(spaceId, payload) {
   const msg = JSON.stringify(payload);
   for (const client of wss.clients) {
-    if (client.spaceId === spaceId && client.readyState === WebSocket.OPEN) {
-      client.send(msg);
-    }
+    if (client.spaceId === spaceId && client.readyState === WebSocket.OPEN) client.send(msg);
   }
 }
 
@@ -263,17 +252,21 @@ wss.on('connection', (ws) => {
   ws.isAlive = true;
   ws.spaceId = null;
   ws.on('pong', () => { ws.isAlive = true; });
-  ws.on('message', (data) => {
+  ws.on('message', async (data) => {
     let msg;
     try { msg = JSON.parse(data.toString()); } catch { return; }
     if (msg.type === 'auth' && msg.token) {
-      const auth = getMemberByToken(msg.token);
-      if (auth) {
-        ws.spaceId = auth.space.id;
-        ws.memberId = auth.member.id;
-        ws.send(JSON.stringify({ type: 'authed', memberId: auth.member.id }));
-      } else {
-        ws.send(JSON.stringify({ type: 'error', message: '认证失败' }));
+      try {
+        const member = await findMemberByToken(msg.token);
+        if (member) {
+          ws.spaceId = member.spaceId;
+          ws.memberId = member.id;
+          ws.send(JSON.stringify({ type: 'authed', memberId: member.id }));
+        } else {
+          ws.send(JSON.stringify({ type: 'error', message: '认证失败' }));
+        }
+      } catch {
+        ws.send(JSON.stringify({ type: 'error', message: '服务器错误' }));
       }
     }
   });
@@ -288,6 +281,13 @@ setInterval(() => {
   }
 }, 30000);
 
+// ---------- 错误处理 ----------
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ error: '服务器错误：' + (err && err.message ? err.message : '未知错误') });
+});
+
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`❤ 情侣日历已启动：http://localhost:${PORT}`);
+  const hasSupabase = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+  console.log(`❤ 情侣日历已启动：http://localhost:${PORT}（Supabase：${hasSupabase ? '已连接' : '未配置'}）`);
 });

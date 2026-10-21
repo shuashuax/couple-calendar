@@ -2,6 +2,8 @@
 
 一个专为异地恋情侣设计的 Web 日历应用：两个人共用一个日历，实时同步彼此的日程，并正确处理时差——即使一个在北京、一个在纽约，也能一眼看清「同一时刻，两边各是几点」。
 
+数据存储在 **Supabase 云端数据库**，永久保存，重启/重新部署都不会丢。
+
 ## ✨ 功能特性
 
 - **双人配对**：一方创建空间生成 6 位「情侣邀请码」，另一方输入即绑定，无需邮箱注册。
@@ -24,15 +26,21 @@
 
 需要 Node.js ≥ 18。
 
-```bash
-cd couple-calendar
-npm install
-npm start
-```
+1. 先按 [`SUPABASE-迁移.md`](./SUPABASE-迁移.md) 完成「建项目 + 建表 + 拿密钥」三步。
+2. 配置环境变量：把 `.env.example` 复制为 `.env`，填入你的两个密钥：
+   ```
+   SUPABASE_URL=https://你的项目ID.supabase.co
+   SUPABASE_SERVICE_ROLE_KEY=你的service_role密钥
+   ```
+3. 启动：
+   ```bash
+   cd couple-calendar
+   npm install
+   npm start
+   ```
+4. 浏览器打开 **http://localhost:3000**（手机和电脑在同一局域网时，也可用手机访问 `http://<电脑局域网IP>:3000`）。
 
-然后浏览器打开 **http://localhost:3000**（手机和电脑在同一局域网时，也可用手机访问 `http://<电脑局域网IP>:3000`）。
-
-> 数据保存在 `data/db.json`（首次启动自动创建），删除该文件即可清空所有数据。
+> 未配置 Supabase 时，服务能启动并显示界面，但一操作会提示「缺少环境变量」——照上面第 2 步配好即可。
 
 ## 📱 使用说明
 
@@ -49,19 +57,12 @@ npm start
 
 ## ☁️ 部署上线（免费）
 
-应用是无状态 + JSON 文件存储的 Node 服务，部署到任意支持 Node 的免费托管即可。以下以 **Render** 为例（免费额度足够两人长期使用）：
+- 完整手把手部署教程：[`DEPLOY-Render.md`](./DEPLOY-Render.md)（含 GitHub 网页上传步骤，零命令行）。
+- Supabase 配置教程：[`SUPABASE-迁移.md`](./SUPABASE-迁移.md)。
 
-1. 把本项目推到 GitHub 仓库。
-2. 到 [render.com](https://render.com) 新建 **Web Service**，连接该仓库。
-3. 配置：
-   - **Runtime**：Node
-   - **Build Command**：`npm install`
-   - **Start Command**：`npm start`
-4. 部署完成后会得到一个 `https://xxx.onrender.com` 地址，两人用手机浏览器打开即可。
+简要流程：Supabase 建项目建表 → 代码推到 GitHub → Render 新建 Web Service 连仓库（Build `npm install`、Start `npm start`）→ 在 Render 环境变量里加 `SUPABASE_URL` 和 `SUPABASE_SERVICE_ROLE_KEY` → 部署完成。
 
-> ⚠️ 注意：Render / Fly 等免费层的文件系统是**临时**的，重启后 `data/db.json` 可能被重置。若要长期保存数据，建议改用有持久磁盘的托管（如 Railway 挂载 Volume、Fly.io Volume），或把存储换成 Supabase / MongoDB Atlas 免费版。个人长期使用推荐 **Railway + Volume** 或 **Fly.io + Volume**。
-
-其他可选：Railway（挂 Volume）、Fly.io（挂 Volume）、Hugging Face Spaces（不推荐，临时文件系统）。
+> 数据存在 Supabase，Render 免费版休眠/重启/重新部署都不会丢数据。
 
 ## 🧱 技术栈
 
@@ -69,24 +70,24 @@ npm start
 |---|---|---|
 | 后端 | Node.js + Express | 轻量、生态成熟、零学习成本 |
 | 实时 | `ws`（WebSocket） | 纯 JS、无需外部服务即可实时同步 |
-| 存储 | JSON 文件（`data/db.json`） | 两人用量足够，零原生依赖、原子写入、好备份 |
+| 存储 | Supabase Postgres（免费） | 云端持久保存，重启/重新部署不丢数据 |
 | 前端 | 原生 HTML/CSS/JS（ES Module） | 无需构建步骤，克隆即跑，易维护 |
 | 时区 | `Intl` + IANA 时区 | 浏览器原生，自动处理夏令时 |
-
-（可选升级：数据量大后可把 `lib/store.js` 换成 SQLite 或 Supabase，API 层无需改动。）
 
 ## 📂 目录结构
 
 ```
 couple-calendar/
-├── server.js          # Express + WebSocket + REST API
-├── lib/store.js       # JSON 文件持久化
+├── server.js            # Express + WebSocket + REST API
+├── lib/store.js         # Supabase 持久化层（字段映射 + 查询）
 ├── public/
-│   ├── index.html     # 页面骨架
-│   ├── styles.css     # 样式（温馨可爱风）
-│   ├── tz.js          # 时区换算工具（UTC ↔ IANA，DST 安全）
-│   └── app.js         # 前端主逻辑（日历渲染/视角切换/实时同步/提醒）
-└── data/db.json       # 运行时生成的数据文件
+│   ├── index.html       # 页面骨架
+│   ├── styles.css       # 样式（温馨可爱风）
+│   ├── tz.js            # 时区换算工具（UTC ↔ IANA，DST 安全）
+│   └── app.js           # 前端主逻辑（日历渲染/视角切换/实时同步/提醒）
+├── SUPABASE-迁移.md      # Supabase 建项目/建表/配密钥教程
+├── DEPLOY-Render.md      # 部署到 Render 的手把手教程
+└── .env.example          # 环境变量样例（复制为 .env 使用）
 ```
 
 ## ⚠️ 已知说明
@@ -99,4 +100,5 @@ couple-calendar/
 
 - 每个「情侣空间」数据完全隔离，邀请码足够随机。
 - 成员 token 不会下发给对方，避免互相冒充。
-- 无任何第三方追踪，数据只存于你自己的服务器。
+- Supabase 的 service_role 密钥**仅存在于服务端**，浏览器永不直接接触 Supabase；数据表已开启 RLS，外部匿名访问被拒绝。
+- 无任何第三方追踪。

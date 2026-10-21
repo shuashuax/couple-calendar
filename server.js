@@ -260,7 +260,13 @@ app.delete('/api/events/:id', async (req, res, next) => {
 app.post('/api/login', async (req, res, next) => {
   try {
     const { loginCode } = req.body || {};
-    const member = await findMemberByLoginCode(String(loginCode || '').toUpperCase().trim());
+    const raw = String(loginCode || '').trim();
+    let member = null;
+    if (raw) {
+      member = (await findMemberByLoginCode(raw))
+        || (await findMemberByLoginCode(raw.toLowerCase()))
+        || (await findMemberByLoginCode(raw.toUpperCase()));
+    }
     if (!member) return res.status(404).json({ error: '登录码无效，请检查' });
     const space = await findSpaceById(member.spaceId);
     if (!space) return res.status(404).json({ error: '空间不存在' });
@@ -279,6 +285,29 @@ app.post('/api/me/login-code', async (req, res, next) => {
     if (!code) {
       code = await uniqueLoginCode();
       await setMemberLoginCode(auth.member.id, code);
+    }
+    res.json({ loginCode: code });
+  } catch (e) { next(e); }
+});
+
+// 设置自定义登录码（要求含字母+数字、长度 4~32、全局唯一）
+app.patch('/api/me/login-code', async (req, res, next) => {
+  try {
+    const auth = await getAuth(req);
+    if (!auth) return res.status(401).json({ error: '未登录' });
+    const code = String((req.body && req.body.loginCode) || '').trim();
+    if (!code) return res.status(400).json({ error: '请填写登录码' });
+    if (/\s/.test(code)) return res.status(400).json({ error: '登录码不能包含空格' });
+    if (code.length < 4 || code.length > 32) return res.status(400).json({ error: '登录码长度需要 4~32 位' });
+    if (!/[0-9]/.test(code)) return res.status(400).json({ error: '登录码需要包含数字' });
+    if (!/[A-Za-z\u4e00-\u9fa5]/.test(code)) return res.status(400).json({ error: '登录码需要包含字母或中文' });
+    const existing = await findMemberByLoginCode(code);
+    if (existing && existing.id !== auth.member.id) return res.status(409).json({ error: '这个登录码已被使用，换一个吧' });
+    try {
+      await setMemberLoginCode(auth.member.id, code);
+    } catch (e) {
+      if (/duplicate|unique/i.test(String((e && e.message) || ''))) return res.status(409).json({ error: '这个登录码已被使用，换一个吧' });
+      throw e;
     }
     res.json({ loginCode: code });
   } catch (e) { next(e); }

@@ -271,15 +271,12 @@ function renderTimeGrid(days, tz) {
     for (let h = 0; h < 24; h++) lines += `<div class="hour-line" style="top:${h * pxPerHour}px"></div>`;
 
     let blocks = '';
-    for (const o of timed) {
-      const s = Math.max(o.start, ds);
-      const e = Math.min(o.end, de);
-      if (e <= s) continue;
-      const top = (localMinutesOf(s, tz) / 60) * pxPerHour;
-      const hgt = Math.max(20, ((e - s) / 3600000) * pxPerHour);
+    for (const it of layoutDayEvents(timed, ds, de, tz, pxPerHour)) {
+      const o = it.o;
       const done = o.event.type === 'todo' && o.event.done;
-      blocks += `<div class="event-block" style="top:${top}px;height:${hgt}px;background:${memberColor(o.event.authorId)};${done ? 'opacity:.55' : ''}" data-ev="${o.event.id}" data-start="${o.start}">
-        <span class="et">${esc(o.event.title)}</span> ${fmtTime(new Date(s), tz)}–${fmtTime(new Date(e), tz)}</div>`;
+      const sideBySide = it.cols > 1 ? `left:calc(${(it.col * 100) / it.cols}% + 2px);width:calc(${100 / it.cols}% - 4px);` : '';
+      blocks += `<div class="event-block" style="top:${it.top}px;height:${it.height}px;${sideBySide}background:${memberColor(o.event.authorId)};${done ? 'opacity:.55' : ''}" data-ev="${o.event.id}" data-start="${o.start}">
+        <span class="et">${esc(o.event.title)}</span> ${fmtTime(new Date(it.s), tz)}–${fmtTime(new Date(it.e), tz)}</div>`;
     }
 
     let nowLine = '';
@@ -327,6 +324,47 @@ function freeIntervals(dayStartUtc, dayEndUtc, tz, occs) {
     } else i++;
   }
   return out;
+}
+
+// 把同一时间段的重叠日程横向并列排开，避免互相遮挡
+function layoutDayEvents(timed, ds, de, tz, pxPerHour) {
+  const items = [];
+  for (const o of timed) {
+    const s = Math.max(o.start, ds);
+    const e = Math.min(o.end, de);
+    if (e <= s) continue;
+    items.push({
+      o, s, e,
+      top: (localMinutesOf(s, tz) / 60) * pxPerHour,
+      height: Math.max(20, ((e - s) / 3600000) * pxPerHour),
+      col: 0, cols: 1,
+    });
+  }
+  items.sort((a, b) => a.s - b.s || a.e - b.e);
+
+  let i = 0;
+  while (i < items.length) {
+    // 找出一个「重叠簇」：相邻事件只要与当前簇的最大结束时间重叠，就属于同一簇
+    let clusterEnd = items[i].e;
+    let j = i;
+    while (j + 1 < items.length && items[j + 1].s < clusterEnd) {
+      j++;
+      if (items[j].e > clusterEnd) clusterEnd = items[j].e;
+    }
+    const cluster = items.slice(i, j + 1);
+    // 贪心分配列：每条事件放到第一个空闲的列里
+    const colEnds = [];
+    for (const it of cluster) {
+      let placed = false;
+      for (let c = 0; c < colEnds.length; c++) {
+        if (colEnds[c] <= it.s) { it.col = c; colEnds[c] = it.e; placed = true; break; }
+      }
+      if (!placed) { it.col = colEnds.length; colEnds.push(it.e); }
+    }
+    for (const it of cluster) it.cols = colEnds.length;
+    i = j + 1;
+  }
+  return items;
 }
 
 function syncViewButtons() {

@@ -18,6 +18,7 @@
       <div class="auth-tabs">
         <button class="auth-tab active" data-tab="create">创建空间</button>
         <button class="auth-tab" data-tab="join">加入空间</button>
+        <button class="auth-tab" data-tab="login">登录</button>
       </div>
       <form id="auth-form">
         <div id="form-space-name" class="field">
@@ -28,14 +29,21 @@
           <label>情侣邀请码</label>
           <input id="inp-invite" placeholder="输入对方给你的 6 位邀请码" maxlength="6" autocomplete="off" style="text-transform:uppercase">
         </div>
-        <div class="field">
-          <label>我的昵称</label>
-          <input id="inp-nickname" placeholder="例如：宝宝">
+        <div id="form-login" class="field" hidden>
+          <label>我的登录码</label>
+          <input id="inp-login" placeholder="例如：ABCD-EFGH-JKLM" autocomplete="off" style="text-transform:uppercase">
+          <div class="field-hint">登录码在设置里「我的登录码」处查看/复制</div>
         </div>
-        <div class="field">
-          <label>我的时区</label>
-          <select id="inp-timezone"></select>
-          <div class="field-hint" id="tz-hint"></div>
+        <div id="form-profile">
+          <div class="field">
+            <label>我的昵称</label>
+            <input id="inp-nickname" placeholder="例如：宝宝">
+          </div>
+          <div class="field">
+            <label>我的时区</label>
+            <select id="inp-timezone"></select>
+            <div class="field-hint" id="tz-hint"></div>
+          </div>
         </div>
         <button type="submit" class="btn btn-primary btn-block" id="auth-submit">开始使用</button>
       </form>
@@ -215,6 +223,22 @@
             <button type="button" class="btn btn-ghost btn-sm" id="btn-copy-invite">复制</button>
           </div>
           <button type="button" class="btn btn-ghost btn-sm" id="btn-regen-invite">重新生成邀请码</button>
+        </div>
+        <div class="field">
+          <label>我的登录码（换设备/退出后用它登录回来）</label>
+          <div class="invite-row">
+            <code id="s-logincode">加载中…</code>
+            <button type="button" class="btn btn-ghost btn-sm" id="btn-copy-logincode">复制</button>
+          </div>
+          <div class="field-hint">⚠️ 请妥善保存，这是你回到这个空间的钥匙</div>
+        </div>
+        <div class="field">
+          <label>数据备份</label>
+          <div style="display:flex; gap:8px;">
+            <button type="button" class="btn btn-ghost" id="btn-export" style="flex:1">导出数据</button>
+            <button type="button" class="btn btn-ghost" id="btn-import" style="flex:1">导入数据</button>
+          </div>
+          <input type="file" id="import-file" accept="application/json,.json" hidden>
         </div>
         <button type="submit" class="btn btn-primary btn-block">保存设置</button>
         <button type="button" class="btn btn-ghost btn-block" id="btn-leave">退出 / 换空间</button>

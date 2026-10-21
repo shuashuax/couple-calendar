@@ -531,6 +531,7 @@ function enterSession(data) {
   $('auth-view').hidden = true;
   $('app-view').hidden = false;
   connectWS();
+  toast('已进入「' + data.space.name + '」');
 }
 function logout() {
   localStorage.removeItem('cc_token');
@@ -592,7 +593,9 @@ function bindEvents() {
       const mode = t.dataset.tab;
       $('form-space-name').hidden = mode !== 'create';
       $('form-invite').hidden = mode !== 'join';
-      $('auth-submit').textContent = mode === 'create' ? '创建空间' : '加入空间';
+      $('form-login').hidden = mode !== 'login';
+      $('form-profile').hidden = mode === 'login';
+      $('auth-submit').textContent = mode === 'create' ? '创建空间' : mode === 'join' ? '加入空间' : '登录';
     });
   });
 
@@ -600,21 +603,26 @@ function bindEvents() {
     e.preventDefault();
     const errEl = $('auth-error');
     errEl.textContent = '';
-    const nickname = $('inp-nickname').value.trim();
-    const timezone = $('inp-timezone').value;
     const mode = document.querySelector('.auth-tab.active').dataset.tab;
-    if (!nickname) { errEl.textContent = '请填写昵称'; return; }
     const btn = $('auth-submit');
     btn.disabled = true;
     try {
       let data;
       if (mode === 'create') {
+        const nickname = $('inp-nickname').value.trim();
+        if (!nickname) { errEl.textContent = '请填写昵称'; return; }
         const name = $('inp-space-name').value.trim();
-        data = await api('/api/spaces', { method: 'POST', body: JSON.stringify({ name, nickname, timezone }) });
-      } else {
+        data = await api('/api/spaces', { method: 'POST', body: JSON.stringify({ name, nickname, timezone: $('inp-timezone').value }) });
+      } else if (mode === 'join') {
+        const nickname = $('inp-nickname').value.trim();
+        if (!nickname) { errEl.textContent = '请填写昵称'; return; }
         const inviteCode = $('inp-invite').value.trim();
         if (!inviteCode) { errEl.textContent = '请输入邀请码'; return; }
-        data = await api('/api/spaces/join', { method: 'POST', body: JSON.stringify({ inviteCode, nickname, timezone }) });
+        data = await api('/api/spaces/join', { method: 'POST', body: JSON.stringify({ inviteCode, nickname, timezone: $('inp-timezone').value }) });
+      } else {
+        const loginCode = $('inp-login').value.trim();
+        if (!loginCode) { errEl.textContent = '请输入登录码'; return; }
+        data = await api('/api/login', { method: 'POST', body: JSON.stringify({ loginCode }) });
       }
       enterSession(data);
     } catch (err) { errEl.textContent = err.message; }
@@ -680,14 +688,21 @@ function bindEvents() {
   $('e-allday').addEventListener('change', () => { toggleAlldayUI($('e-allday').checked); updateTzPreview(); });
   ['e-start-date', 'e-start-time', 'e-end-date', 'e-end-time'].forEach((id) => $(id).addEventListener('change', updateTzPreview));
 
-  $('btn-settings').addEventListener('click', () => {
+  $('btn-settings').addEventListener('click', async () => {
     $('s-space-name').value = state.space.name;
     $('s-nickname').value = state.me.nickname;
     $('s-timezone').value = state.me.timezone;
     $('s-color').value = state.me.color;
     $('s-together').value = state.space.togetherSince || '';
     $('s-invite').textContent = state.space.inviteCode;
+    $('s-logincode').textContent = '加载中…';
     openModal('modal-settings');
+    try {
+      const r = await api('/api/me/login-code', { method: 'POST' });
+      $('s-logincode').textContent = r.loginCode;
+    } catch (e) {
+      $('s-logincode').textContent = '获取失败，请重试';
+    }
   });
   $('settings-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -699,17 +714,61 @@ function bindEvents() {
     try { await api('/api/space', { method: 'PATCH', body: JSON.stringify(body) }); closeModal('modal-settings'); await refreshData(); toast('已保存'); }
     catch (err) { toast(err.message, 'warn'); }
   });
-  async function copyText(t) {
-    try { await navigator.clipboard.writeText(t); toast('已复制邀请码'); }
+  async function copyText(t, label = '已复制') {
+    try { await navigator.clipboard.writeText(t); toast(label); }
     catch { toast('复制失败，请手动复制'); }
   }
-  $('btn-copy-invite').addEventListener('click', () => copyText($('s-invite').textContent));
-  $('banner-copy').addEventListener('click', () => copyText($('banner-invite').textContent));
+  $('btn-copy-invite').addEventListener('click', () => copyText($('s-invite').textContent, '已复制邀请码'));
+  $('banner-copy').addEventListener('click', () => copyText($('banner-invite').textContent, '已复制邀请码'));
+  $('btn-copy-logincode').addEventListener('click', () => copyText($('s-logincode').textContent, '已复制登录码'));
   $('btn-regen-invite').addEventListener('click', async () => {
     try { const r = await api('/api/space/regenerate-invite', { method: 'POST' }); $('s-invite').textContent = r.inviteCode; await refreshData(); toast('邀请码已更新'); }
     catch (err) { toast(err.message, 'warn'); }
   });
-  $('btn-leave').addEventListener('click', logout);
+
+  // 导出数据（备份）
+  $('btn-export').addEventListener('click', async () => {
+    try {
+      const res = await fetch('/api/export', { headers: { Authorization: 'Bearer ' + state.token } });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || '导出失败'); }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'couple-calendar-backup.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast('已导出备份文件');
+    } catch (err) { toast(err.message, 'warn'); }
+  });
+
+  // 导入数据（恢复）
+  $('btn-import').addEventListener('click', () => $('import-file').click());
+  $('import-file').addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      if (!confirm('导入会覆盖当前空间里的所有日程，确定继续吗？')) return;
+      const res = await fetch('/api/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + state.token },
+        body: JSON.stringify(data),
+      });
+      const r = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(r.error || '导入失败');
+      await refreshData();
+      toast(`已导入 ${r.imported} 条日程`);
+    } catch (err) { toast(err.message, 'warn'); }
+    finally { e.target.value = ''; }
+  });
+
+  $('btn-leave').addEventListener('click', () => {
+    if (!confirm('确定退出吗？\n\n退出后可在「登录」页用「我的登录码」重新进入本空间。\n（请先确认已保存上面的登录码）')) return;
+    logout();
+  });
 
   document.addEventListener('click', (e) => {
     const closer = e.target.closest('[data-close]');

@@ -31,8 +31,8 @@
         </div>
         <div id="form-login" class="field" hidden>
           <label>我的登录码</label>
-          <input id="inp-login" placeholder="例如：ABCD-EFGH-JKLM" autocomplete="off" style="text-transform:uppercase">
-          <div class="field-hint">登录码在设置里「我的登录码」处查看/复制</div>
+          <input id="inp-login" placeholder="输入你的登录码，例如：宝宝11.22乖乖" autocomplete="off">
+          <div class="field-hint">登录码在设置里可查看和自定义</div>
         </div>
         <div id="form-profile">
           <div class="field">
@@ -227,10 +227,12 @@
         <div class="field">
           <label>我的登录码（换设备/退出后用它登录回来）</label>
           <div class="invite-row">
-            <code id="s-logincode">加载中…</code>
-            <button type="button" class="btn btn-ghost btn-sm" id="btn-copy-logincode">复制</button>
+            <input id="s-logincode-input" style="flex:1;min-width:0" placeholder="例如：宝宝11.22乖乖" maxlength="32" autocomplete="off">
+            <button type="button" class="btn btn-ghost btn-sm" id="btn-save-logincode">保存</button>
           </div>
-          <div class="field-hint">⚠️ 请妥善保存，这是你回到这个空间的钥匙</div>
+          <div class="field-hint" id="s-logincode-hint">推荐格式：你的名字 + 恋爱日期 + 对方名字，例如「宝宝11.22乖乖」（你自己的名字在前面）</div>
+          <div class="field-hint" id="s-logincode-status"></div>
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-random-logincode" style="margin-top:6px">随机生成一个</button>
         </div>
         <div class="field">
           <label>数据备份</label>

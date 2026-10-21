@@ -733,13 +733,22 @@ function bindEvents() {
     $('s-color').value = state.me.color;
     $('s-together').value = state.space.togetherSince || '';
     $('s-invite').textContent = state.space.inviteCode;
-    $('s-logincode').textContent = '加载中…';
+    $('s-logincode-input').value = '';
+    $('s-logincode-status').textContent = '';
+    const meName = state.me.nickname || '我';
+    const partnerName = state.partner ? state.partner.nickname : '对方';
+    let dateStr = '11.22';
+    if (state.space.togetherSince) {
+      const parts = String(state.space.togetherSince).split('-');
+      if (parts.length === 3) dateStr = `${parseInt(parts[1], 10)}.${parseInt(parts[2], 10)}`;
+    }
+    $('s-logincode-hint').textContent = `推荐格式：你的名字 + 恋爱日期 + 对方名字，例如「${meName}${dateStr}${partnerName}」（你自己的名字在前面）`;
     openModal('modal-settings');
     try {
       const r = await api('/api/me/login-code', { method: 'POST' });
-      $('s-logincode').textContent = r.loginCode;
+      $('s-logincode-input').value = r.loginCode;
     } catch (e) {
-      $('s-logincode').textContent = '获取失败，请重试';
+      $('s-logincode-status').textContent = '获取失败，请重试';
     }
   });
   $('settings-form').addEventListener('submit', async (e) => {
@@ -758,7 +767,27 @@ function bindEvents() {
   }
   $('btn-copy-invite').addEventListener('click', () => copyText($('s-invite').textContent, '已复制邀请码'));
   $('banner-copy').addEventListener('click', () => copyText($('banner-invite').textContent, '已复制邀请码'));
-  $('btn-copy-logincode').addEventListener('click', () => copyText($('s-logincode').textContent, '已复制登录码'));
+  async function saveLoginCode() {
+    const code = $('s-logincode-input').value.trim();
+    $('s-logincode-status').textContent = '';
+    try {
+      const r = await api('/api/me/login-code', { method: 'PATCH', body: JSON.stringify({ loginCode: code }) });
+      $('s-logincode-input').value = r.loginCode;
+      $('s-logincode-status').textContent = '✅ 已保存，请记住这个登录码';
+      toast('登录码已更新');
+    } catch (err) {
+      $('s-logincode-status').textContent = '❌ ' + err.message;
+    }
+  }
+  $('btn-save-logincode').addEventListener('click', saveLoginCode);
+  $('s-logincode-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveLoginCode(); } });
+  $('btn-random-logincode').addEventListener('click', () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let s = '';
+    for (let i = 0; i < 12; i++) s += chars[Math.floor(Math.random() * chars.length)];
+    $('s-logincode-input').value = `${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8, 12)}`;
+    $('s-logincode-status').textContent = '已生成随机码，点「保存」生效';
+  });
   $('btn-regen-invite').addEventListener('click', async () => {
     try { const r = await api('/api/space/regenerate-invite', { method: 'POST' }); $('s-invite').textContent = r.inviteCode; await refreshData(); toast('邀请码已更新'); }
     catch (err) { toast(err.message, 'warn'); }
